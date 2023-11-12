@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>User Details Form</title>
+  <!--<link rel="stylesheet" type="text/css" href="/style.css">-->
+</head>
+
+<body>
+  <h2>Create Banking Record</h2>
+  <form action="/create-banking-record" method="post" id="createRecordForm">
+    <label for="username">Username:</label>
+    <input type="text" id="username" name="username" required>
+    <br>
+    <label for="password">Password:</label>
+    <input type="password" id="password" name="password" required>
+    <br>
+    <label for="accountNo">Account Number:</label>
+    <input type="text" id="accountNo" name="accountNo" required>
+    <br>
+    <label for="balance">Deposit/Withdraw:</label>
+    <input type="number" id="balance" name="balance" required>
+    <br>
+    <button type="submit">Create Record</button>
+  </form>
+  <h2>Update Banking Record</h2>
+  <form action="/update-banking-record/:id" method="post" id="updateRecordForm">
+    <label for="accountNo">Account Number:</label>
+    <input type="text" id="accountNo" name="accountNo" required>
+    <br>
+    <label for="balance">Deposit/Withdraw:</label>
+    <input type="number" id="balance" name="balance" required>
+    <br>
+    <button type="submit">Update Record</button>
+  </form>
+
+</body>
+
+</html>
