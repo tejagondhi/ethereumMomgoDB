@@ -1,10 +1,12 @@
 const { MongoClient, ObjectId } = require('mongodb');
-const { Web3 } = require('web3');
+const { storeHash } = require('./functions/storeHash');
+const { retrieveHash } = require('./functions/retrieveHash');
 const express = require('express');
 const ejs = require('ejs');
 const bodyParser = require('body-parser');
 const app = express();
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 // dotenv.config(); // Load environment variables from .env
 require('dotenv').config();
 
@@ -12,6 +14,16 @@ require('dotenv').config();
 let db; // Declare db variable
 let recordId;
 let newWithdrawAmount;
+
+//util functions
+function jsonToHash(jsonObject) {
+  const jsonString = JSON.stringify(jsonObject);
+  const hash = crypto.createHash('sha256');
+  hash.update(jsonString);
+  const hashString = hash.digest('hex');
+  return hashString;
+}
+
 
 // MongoDB configuration
 const mongoURL = 'mongodb://localhost:27017/bankingData';
@@ -51,13 +63,21 @@ client.connect()
       // Hash the password securely
       const hashedPassword = await bcrypt.hash(password, 10);
 
+      
+
+
+
       // Create a new banking record
       const newRecord = {
         username: username,
         password: hashedPassword,
         accountNo: accountNo,
-        balance: balance
+        balance: balance,
       };
+      const hash = jsonToHash(newRecord);
+      
+
+
       db = client.db(dbName);
       if (db) {
         const usersCollection = db.collection('bankingData'); // Replace 'bankingData' with the correct collection name
@@ -91,6 +111,10 @@ client.connect()
       else {
         console.log("dberror");
       }
+
+      storeHash(accountNo,hash); 
+
+
     });
 
     // Define a route to retrieve banking records (Read)
@@ -110,14 +134,39 @@ client.connect()
         const usersCollection = db.collection('bankingData');
         const existingAccount = await usersCollection.findOne({ accountNo: accountNo });
         if (existingAccount) {
+          const dummy = {
+            username: existingAccount.username,
+            password: existingAccount.hashedPassword,
+            accountNo: existingAccount.accountNo,
+            balance: balance
+          }
+          const currHash = jsonToHash(dummy)
+          const hash = retrieveHash(existingAccount.accountNo)
+          if(hash !== currHash){
+            console.error("Account have bee compromised")
+            const result = await usersCollection.deleteOne({ _id: ObjectId(recordId) });//todo
+            return
+          }
           recordId = existingAccount._id;
           const currentWithdrawAmount = parseFloat(existingAccount.balance);
           const withdraw = parseFloat(balance);
           newWithdrawAmount = parseFloat(currentWithdrawAmount + withdraw);
         }
+
+        const newRecord = {
+          username: existingAccount.username,
+          password: existingAccount.hashedPassword,
+          accountNo: existingAccount.accountNo,
+          balance: newWithdrawAmount
+        }
+
+        const hash = jsonToHash(newRecord);
+        storeHash(accountNo,hash); 
+
+
         const updatedRecord = await usersCollection.findOneAndUpdate(
           { _id: new ObjectId(recordId) }, // Use new ObjectId()
-          { $set: { accountNo: accountNo, balance: newWithdrawAmount } },
+          { $set: { accountNo: accountNo, balance: newWithdrawAmount,hash : hash } },
           { returnOriginal: false }
         );
         // Now, interact with the Ganache Ethereum blockchain to store the transaction hash
@@ -215,6 +264,7 @@ app.post('/submit', async (req, res) => {
         res.status(500).send('Error storing data');
       } else {
         console.log('User data stored in MongoDB:', result.ops[0]);
+        storeHash(accountNo,hash); 
         // Now, interact with the Ethereum blockchain to store the hash (as described in previous responses).
 
         res.send('Data submitted successfully!'); // You can customize this response.
