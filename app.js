@@ -3,28 +3,21 @@ const { Web3 } = require('web3');
 const express = require('express');
 const ejs = require('ejs');
 const bodyParser = require('body-parser');
-const app = express();
+const crypto = require('crypto');
 const bcrypt = require('bcrypt');
-// dotenv.config(); // Load environment variables from .env
 require('dotenv').config();
 
-// const dotenv = require('dotenv');
-let db; // Declare db variable
+let db;
 let recordId;
 let newWithdrawAmount;
 
-// MongoDB configuration
 const mongoURL = 'mongodb://localhost:27017/bankingData';
 const dbName = 'bankingData';
+const web3 = new Web3('http://localhost:7545');
+const { abi } = require('./build/contracts/BankingContract.json');
+const contractAddress = '0xf1666c88bA7ba6a57378EE2C25c3B6545D9DEBf5';
+const contract = new web3.eth.Contract(abi, contractAddress);
 
-//const mongoURL = 'mongodb://localhost:27017/bankingData'; // Replace with your MongoDB connection URL
-
-if (!mongoURL || !mongoURL.startsWith('mongodb://')) {
-  console.error('Invalid or undefined MongoDB connection URL. Please check your .env file.');
-  process.exit(1);
-}
-
-// Initialize MongoDB connection using MongoClient
 const client = new MongoClient(mongoURL, { useNewUrlParser: true, useUnifiedTopology: true });
 
 client.connect()
@@ -32,107 +25,135 @@ client.connect()
     console.log('Connected to MongoDB');
     db = client.db(dbName);
     if (db) {
-      const usersCollection = db.collection('bankingData'); // Replace 'bankingData' with the correct collection name
+      const usersCollection = db.collection('bankingData');
       usersCollection.createIndex({ accountNo: 1 }, { unique: true });
-    }
-    else {
+    } else {
       console.log("dberror");
     }
-    // Serve the form page
+
+    const app = express();
+    app.set('view engine', 'ejs');
+    app.use(bodyParser.urlencoded({ extended: true }));
+    app.use(express.static('public'));
+
     app.get('/', (req, res) => {
       res.render('index');
     });
 
-    // Handle form submission
-    // Define a route to create a new banking record (Create)
     app.post('/create-banking-record', async (req, res) => {
       const { username, password, accountNo, balance } = req.body;
-
-      // Hash the password securely
       const hashedPassword = await bcrypt.hash(password, 10);
 
-      // Create a new banking record
       const newRecord = {
         username: username,
         password: hashedPassword,
         accountNo: accountNo,
-        balance: balance
+        balance: balance,
+        dataHash: '',
       };
-      db = client.db(dbName);
-      if (db) {
-        const usersCollection = db.collection('bankingData'); // Replace 'bankingData' with the correct collection name
-        const existingAccount = await usersCollection.findOne({ accountNo: accountNo });
-        if (existingAccount) {
-          // An account with the same number already exists, handle the error
-          res.status(400).send('An account with this number already exists.');
-        } else {
 
-          // Insert the new record into MongoDB
-          const usersCollection = db.collection('bankingData');
-          const result = await usersCollection.insertOne(newRecord);
+      const usersCollection = db.collection('bankingData');
+      const existingAccount = await usersCollection.findOne({ accountNo: accountNo });
 
-          res.send('New banking record created successfully!');
-          // Get a reference to the form
-          // const clearFormScript = `
-          // <script>
-          //     document.getElementById("createRecordForm").reset();
-          // </script>
-          // `;
+      if (existingAccount) {
+        res.status(400).send('An account with this number already exists.');
+      } else {
+        const result = await usersCollection.insertOne(newRecord);
 
-          // Listen for the form submission
-          // createRecordForm.addEventListener("submit", function (event) {
-          //   event.preventDefault(); // Prevent the default form submission
+        try {
+          const existingAccount = await usersCollection.findOne({ accountNo: accountNo });
 
-          //   // Clear input fields
-          //   createRecordForm.reset();
-          // });
+          if (existingAccount) {
+            recordId = existingAccount._id;
+            const dataHash = calculateHash({accountNo,username,balance});
+            await usersCollection.updateOne({ _id: recordId }, { $set: { dataHash: dataHash } });
+
+            const currentWithdrawAmount = parseFloat(existingAccount.balance);
+            const withdraw = parseFloat(balance);
+            newWithdrawAmount = parseFloat(currentWithdrawAmount + withdraw);
+
+            const accounts = await web3.eth.getAccounts();
+            const gas = await contract.methods.storeRecord(parseInt(recordId), username, hashedPassword, accountNo, balance).estimateGas();
+            const result = await contract.methods.storeRecord(parseInt(recordId), username, hashedPassword, accountNo, balance)
+              .send({ from: accounts[0], gas });
+
+            console.log('Transaction receipt:', result);
+            res.send('New banking record created successfully!');
+          }
+
+        } catch (error) {
+          console.error('Error creating new record:', error);
+          res.status(500).send('Error creating new record');
         }
-      }
-      else {
-        console.log("dberror");
       }
     });
 
-    // Define a route to retrieve banking records (Read)
     app.get('/banking-records', async (req, res) => {
-      const usersCollection = db.collection('bankingData');
-      const records = await usersCollection.find({}).toArray();
+      try {
+        const accountNo = req.query.accountNo;
 
-      // Send the retrieved records as a response (you may want to render this data in a view)
-      res.json(records);
+        if (!accountNo) {
+          return res.status(400).send('Account number (accountNo) is required in the query parameters.');
+        }
+
+        const usersCollection = db.collection('bankingData');
+        const records = await usersCollection.find({ accountNo: accountNo }).toArray();
+
+        if (records.length === 0) {
+          return res.status(404).send('No records found for the provided account number.');
+        }
+        const hashFields = {
+          accountNo: records[0].accountNo,
+          username : records[0].username,
+          balance: records[0].balance
+        };
+        const dataHash = calculateHash(hashFields);
+
+        if (dataHash !== records[0].dataHash) {
+          return res.status(500).send('Data has been tampered with!');
+        }
+
+        res.json(records);
+      } catch (error) {
+        console.error('Error retrieving banking records:', error);
+        res.status(500).send('Error retrieving banking records');
+      }
     });
 
     app.post('/update-banking-record/:id', async (req, res) => {
-      //const recordId = req.body._id;
       const { accountNo, balance } = req.body;
       db = client.db(dbName);
       try {
         const usersCollection = db.collection('bankingData');
         const existingAccount = await usersCollection.findOne({ accountNo: accountNo });
+
         if (existingAccount) {
           recordId = existingAccount._id;
           const currentWithdrawAmount = parseFloat(existingAccount.balance);
           const withdraw = parseFloat(balance);
-          newWithdrawAmount = parseFloat(currentWithdrawAmount + withdraw);
+          newWithdrawAmount = (currentWithdrawAmount + withdraw).toString();
         }
+
         const updatedRecord = await usersCollection.findOneAndUpdate(
-          { _id: new ObjectId(recordId) }, // Use new ObjectId()
+          { _id: recordId },
           { $set: { accountNo: accountNo, balance: newWithdrawAmount } },
           { returnOriginal: false }
         );
-        // Now, interact with the Ganache Ethereum blockchain to store the transaction hash
-        const senderAddress = '0x666C48339df091F2Ad01499B66618493f37edCb4'; // Replace with your Ethereum address
-        const privateKey = '0xf6650a24c08a3b324371ba74cdffbdc7b3521996a89b8c1fb42e49dd339ed787'; // Replace with your private key
 
-        // Create a transaction to store the transaction hash
+        const dataHash = calculateHash(updatedRecord);
+        await usersCollection.updateOne({ _id: recordId }, { $set: { dataHash: dataHash } });
+
+        const senderAddress = '0x4b70153AAB738F56c3410bb0Acc5Ba357F6F6c01';
+        const privateKey = '0x6c2d6a91f5641d0c1b296ac3642d9c206189eb6e55e900517c448fb9858c834c';
+        const transactionData = contract.methods.updateRecord(parseInt(recordId), existingAccount.username, existingAccount.password, accountNo, newWithdrawAmount).encodeABI();
+
         const transaction = {
           from: senderAddress,
-          to: '0x0951Eb266b33cF11C64b7d8a12a08A561aE512b1', // Replace with the target address
-          value: web3.utils.toWei('0', 'ether'), // Value in Wei
-          data : '0x' // Replace with your transaction data
+          to: '0xf1666c88bA7ba6a57378EE2C25c3B6545D9DEBf5',
+          value: web3.utils.toWei('0', 'ether'),
+          data: transactionData,
         };
 
-        // Sign and send the transaction
         web3.eth.accounts.wallet.add(privateKey);
         const receipt = await web3.eth.sendTransaction(transaction);
 
@@ -140,27 +161,21 @@ client.connect()
 
         res.send('Banking record updated successfully!');
       } catch (error) {
-        // Handle errors appropriately
         console.error('Error updating record:', error);
         res.status(500).send('Error updating record');
       }
-
     });
 
-
-    // Define a route to delete a banking record (Delete)
     app.delete('/delete-banking-record/:id', async (req, res) => {
       const recordId = req.params.id;
 
-      // Delete the specified banking record
       const usersCollection = db.collection('bankingData');
-      const result = await usersCollection.deleteOne({ _id: ObjectId(recordId) });
+      const result = await usersCollection.deleteOne({ accountNo: recordId });
 
       res.send('Banking record deleted successfully!');
     });
 
-
-    const port = process.env.PORT || 3002;
+    const port = process.env.PORT || 3000;
     app.listen(port, () => {
       console.log(`Server is running on port ${port}`);
     });
@@ -170,68 +185,8 @@ client.connect()
     process.exit(1);
   });
 
-
-// Ethereum configuration
-const web3 = new Web3('http://127.0.0.1:7545');
-
-// EJS and body-parser middleware
-app.set('view engine', 'ejs');
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(express.static('public'));
-
-// Serve the form page
-app.get('/', (req, res) => {
-  res.render('index');
-});
-
-// Handle form submission
-app.post('/submit', async (req, res) => {
-  const username = req.body.username;
-  const password = req.body.password;
-  const accountNo = req.body.accountNo;
-  const amount = req.body.balance;
-
-
-  // Hash the password securely
-  const hashedPassword = await bcrypt.hash(password, 10);
-
-  // Store user data in MongoDB
-  const userData = {
-    username: username,
-    password: hashedPassword,
-    accountNo: accountNo,
-    deporwith: amount
-  };
-
-
-  // const db = await initMongoDB();
-
-  if (db) {
-    // Now, you can safely use the db object for MongoDB interactions
-    const usersCollection = db.collection('bankingData'); // Replace 'users' with the correct collection name
-    usersCollection.insertOne(userData, (err, result) => {
-      if (err) {
-        console.error('Error storing data in MongoDB:', err);
-        res.status(500).send('Error storing data');
-      } else {
-        console.log('User data stored in MongoDB:', result.ops[0]);
-        // Now, interact with the Ethereum blockchain to store the hash (as described in previous responses).
-
-        res.send('Data submitted successfully!'); // You can customize this response.
-      }
-    });
-
-    // Rest of your MongoDB interaction code
-  } else {
-    res.status(500).send('MongoDB connection error');
-  }
-
-  res.send('Form submitted successfully');
-
-});
-
-const port = process.env.PORT || 3003;
-app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
-});
-
+function calculateHash(data) {
+  const dataString = JSON.stringify(data) || '';
+  const hash = crypto.createHash('sha256').update(dataString).digest('hex');
+  return hash;
+}

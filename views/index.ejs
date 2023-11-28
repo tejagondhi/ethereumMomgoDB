@@ -23,6 +23,12 @@
     <br>
     <button type="submit">Create Record</button>
   </form>
+  <h2>Get Banking Records</h2>
+  <label for="accountNoGet">Enter Account Number:</label>
+  <input type="text" id="accountNoGet" name="accountNo" required>
+  <button onclick="getBankingRecords()">Get Records</button>
+  <div id="recordsContainer"></div>
+
   <h2>Update Banking Record</h2>
   <form action="/update-banking-record/:id" method="post" id="updateRecordForm">
     <label for="accountNo">Account Number:</label>
@@ -33,6 +39,69 @@
     <br>
     <button type="submit">Update Record</button>
   </form>
+
+  <h2>Delete Banking Record</h2>
+  <form action="/delete-banking-record" method="post" id="deleteRecordForm">
+    <label for="accountNoDelete">Enter Account Number:</label>
+    <input type="text" id="accountNoDelete" name="accountNo" required>
+    <button type="button" onclick="deleteBankingRecord()">Delete Record</button>
+  </form>
+
+  <script>
+    async function getBankingRecords() {
+      const accountNo = document.getElementById('accountNoGet').value;
+
+      try {
+        const response = await fetch(`/banking-records?accountNo=${accountNo}`);
+        const records = await response.json();
+
+        if (response.ok) {
+          displayRecords(records);
+        } else {
+          alert(`Error: ${response.status} - ${response.statusText}`);
+        }
+      } catch (error) {
+        console.error('Error:', error);
+        alert(error);
+      }
+    }
+
+    function displayRecords(records) {
+      const recordsContainer = document.getElementById('recordsContainer');
+      recordsContainer.innerHTML = '';
+
+      if (records.length === 0) {
+        recordsContainer.innerHTML = '<p>No records found for the provided account number.</p>';
+      } else {
+        const list = document.createElement('ul');
+
+        records.forEach(record => {
+          const listItem = document.createElement('li');
+          listItem.textContent = `Username: ${record.username}, Account Number: ${record.accountNo}, Balance: ${record.balance}`;
+          list.appendChild(listItem);
+        });
+
+        recordsContainer.appendChild(list);
+      }
+    }
+    async function deleteBankingRecord() {
+      const accountNo = document.getElementById('accountNoDelete').value;
+
+      try {
+        const response = await fetch(`/delete-banking-record/${accountNo}`, { method: 'DELETE' });
+
+        if (response.ok) {
+          alert('Banking record deleted successfully!');
+        } else {
+          alert(`Error: ${response.status} - ${response.statusText}`);
+        }
+      } catch (error) {
+        console.error('Error:', error);
+        alert('An error occurred while deleting the record.');
+      }
+    }
+  </script>
+
 
 </body>
 
